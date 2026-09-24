@@ -23,18 +23,24 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Izinkan request jika origin terdaftar ATAU jika origin undefined (seperti Postman/mobile app)
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('CORS policy violation: Access denied'));
-      }
+      // 1. Bolehkan jika tidak ada origin (Postman/Server-to-Server)
+      if (!origin) return callback(null, true);
+
+      // 2. Bolehkan jika terdaftar di allowedOrigins
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+
+      // 3. Bolehkan SEMUA domain Vercel (*.vercel.app) biar gak ke-block saat preview/deploy
+      if (origin.endsWith('.vercel.app')) return callback(null, true);
+
+      // Jika tidak memenuhi syarat di atas -> Tolak
+      return callback(new Error('CORS policy violation: Access denied'));
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
   })
 );
+
 // 3. Body Parser Limiter (Cegah Body Payload Bom/Overload)
 app.use(express.json({ limit: '10kb' }));
 
