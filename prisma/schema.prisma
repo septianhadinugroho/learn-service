@@ -1,0 +1,26 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                   Int       @id @default(autoincrement())
+  name                 String    @db.VarChar(100)
+  email                String    @unique @db.VarChar(100)
+  password             String?   @db.VarChar(255) // Diubah jadi optional
+  googleId             String?   @unique @map("google_id") @db.VarChar(255)
+  avatar               String?   @db.VarChar(500)
+  isVerified           Boolean   @default(false) @map("is_verified")
+  otpCode              String?   @map("otp_code") @db.VarChar(10)
+  otpExpires           DateTime? @map("otp_expires")
+  resetPasswordToken   String?   @map("reset_password_token") @db.VarChar(255)
+  resetPasswordExpires DateTime? @map("reset_password_expires")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  @@map("users")
+}
