@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import prisma from '../config/db.js';
 import { AuthenticatedRequest } from '../middlewares/authMiddleware.js';
 import { sendOTPEmail } from '../config/mailer.js';
+import { sendResetPasswordEmail } from '../config/mailer';
 import { OAuth2Client } from 'google-auth-library';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -344,7 +345,7 @@ export const deleteAccount = async (req: AuthenticatedRequest, res: Response): P
   }
 };
 
-// 7. FORGOT PASSWORD
+// 7. FORGOT PASSWORD (Kirim Kode OTP Reset via Email)
 export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
   const { email } = req.body;
 
@@ -357,51 +358,53 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
     const user = await prisma.user.findUnique({ where: { email } });
 
     if (!user) {
-      res.status(404).json({ success: false, message: 'User with given email not found' });
+      res.status(404).json({ success: false, message: 'User with this email does not exist' });
       return;
     }
 
-    // Proteksi jika akun terdaftar via Google tanpa password
-    if (!user.password && user.googleId) {
-      res.status(400).json({
-        success: false,
-        message: 'This account was created using Google Sign-In. Please log in using Google.'
-      });
-      return;
-    }
+    // Generate 6-digit OTP
+    const resetOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000); // Valid 15 menit
 
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 3600000);
-
+    // Update DB
     await prisma.user.update({
       where: { email },
-      data: { resetPasswordToken: resetToken, resetPasswordExpires: expiresAt }
+      data: {
+        resetPasswordToken: resetOtp,
+        resetPasswordExpires: resetPasswordExpires,
+      },
     });
+
+    // Kirim Email OTP menggunakan helper fungsi dari mailer.ts
+    await sendResetPasswordEmail(email, resetOtp);
 
     res.status(200).json({
       success: true,
-      message: 'Password reset token generated successfully',
-      resetToken
+      message: 'Reset OTP code has been sent to your email',
     });
   } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('Error sending reset email:', error);
+    res.status(500).json({ success: false, message: 'Failed to send reset email. ' + error.message });
   }
 };
 
-// 8. RESET PASSWORD
+// 8. RESET PASSWORD (Verifikasi OTP & Update Password Baru)
 export const resetPassword = async (req: Request, res: Response): Promise<void> => {
   const { token, newPassword, confirmNewPassword } = req.body;
 
   if (!token || !newPassword || !confirmNewPassword) {
     res.status(400).json({
       success: false,
-      message: 'Token, new password, and confirm password are required'
+      message: 'OTP code, new password, and confirm new password are required',
     });
     return;
   }
 
   if (newPassword !== confirmNewPassword) {
-    res.status(400).json({ success: false, message: 'New password and confirm password do not match' });
+    res.status(400).json({
+      success: false,
+      message: 'New password and confirm new password do not match',
+    });
     return;
   }
 
@@ -409,12 +412,15 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
     const user = await prisma.user.findFirst({
       where: {
         resetPasswordToken: token,
-        resetPasswordExpires: { gt: new Date() }
-      }
+        resetPasswordExpires: { gt: new Date() },
+      },
     });
 
     if (!user) {
-      res.status(400).json({ success: false, message: 'Invalid or expired token' });
+      res.status(400).json({
+        success: false,
+        message: 'Invalid or expired OTP verification code',
+      });
       return;
     }
 
@@ -425,11 +431,14 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
       data: {
         password: hashedPassword,
         resetPasswordToken: null,
-        resetPasswordExpires: null
-      }
+        resetPasswordExpires: null,
+      },
     });
 
-    res.status(200).json({ success: true, message: 'Password has been reset successfully' });
+    res.status(200).json({
+      success: true,
+      message: 'Password reset successful. You can now login with your new password.',
+    });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }
