@@ -293,7 +293,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
 // 5. UPDATE PROFILE
 export const updateProfile = async (req: Request, res: Response): Promise<void> => {
-  const userId = (req as any).user.id; // Dari JWT middleware
+  const userId = (req as any).user.id;
   const { name, email } = req.body;
 
   try {
@@ -303,7 +303,16 @@ export const updateProfile = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // 1. Jika cuma ganti Nama (Email tidak berubah)
+    // 1. Proteksi Akun Google: Tolak jika coba ubah email
+    if (currentUser.googleId && email !== currentUser.email) {
+      res.status(400).json({
+        success: false,
+        message: 'Accounts registered via Google Sign-In cannot change their email address.',
+      });
+      return;
+    }
+
+    // 2. Jika cuma ganti Nama (Email sama)
     if (email === currentUser.email) {
       const updatedUser = await prisma.user.update({
         where: { id: userId },
@@ -318,28 +327,22 @@ export const updateProfile = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // 2. Jika Ganti Email -> Cek apakah email baru sudah dipakai orang lain
+    // 3. Jika Akun Regular ganti Email -> Cek keunikan email baru
     const existingEmail = await prisma.user.findUnique({ where: { email } });
     if (existingEmail) {
       res.status(400).json({ success: false, message: 'Email is already in use' });
       return;
     }
 
-    // Generate OTP untuk verifikasi Email Baru
+    // Generate OTP untuk Email Baru
     const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 menit
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
-    // Simpan OTP & Nama baru dulu di DB
     await prisma.user.update({
       where: { id: userId },
-      data: {
-        name,
-        otpCode,
-        otpExpires,
-      },
+      data: { name, otpCode, otpExpires },
     });
 
-    // Kirim OTP ke EMAIL BARU
     await sendOTPEmail(email, otpCode);
 
     res.status(200).json({
