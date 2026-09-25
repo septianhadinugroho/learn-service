@@ -292,40 +292,106 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 };
 
 // 5. UPDATE PROFILE
-export const updateProfile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  const userId = req.user?.id;
+export const updateProfile = async (req: Request, res: Response): Promise<void> => {
+  const userId = (req as any).user.id; // Dari JWT middleware
   const { name, email } = req.body;
 
-  if (!name && !email) {
-    res.status(400).json({ success: false, message: 'Please provide name or email to update' });
+  try {
+    const currentUser = await prisma.user.findUnique({ where: { id: userId } });
+    if (!currentUser) {
+      res.status(404).json({ success: false, message: 'User not found' });
+      return;
+    }
+
+    // 1. Jika cuma ganti Nama (Email tidak berubah)
+    if (email === currentUser.email) {
+      const updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: { name },
+      });
+      res.status(200).json({
+        success: true,
+        message: 'Profile updated successfully',
+        data: updatedUser,
+        requiresEmailVerification: false,
+      });
+      return;
+    }
+
+    // 2. Jika Ganti Email -> Cek apakah email baru sudah dipakai orang lain
+    const existingEmail = await prisma.user.findUnique({ where: { email } });
+    if (existingEmail) {
+      res.status(400).json({ success: false, message: 'Email is already in use' });
+      return;
+    }
+
+    // Generate OTP untuk verifikasi Email Baru
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 menit
+
+    // Simpan OTP & Nama baru dulu di DB
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        name,
+        otpCode,
+        otpExpires,
+      },
+    });
+
+    // Kirim OTP ke EMAIL BARU
+    await sendOTPEmail(email, otpCode);
+
+    res.status(200).json({
+      success: true,
+      message: `Verification OTP sent to new email: ${email}`,
+      requiresEmailVerification: true,
+      pendingEmail: email,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// VERIFY NEW EMAIL OTP
+export const verifyNewEmail = async (req: Request, res: Response): Promise<void> => {
+  const userId = (req as any).user.id;
+  const { newEmail, otpCode } = req.body;
+
+  if (!newEmail || !otpCode) {
+    res.status(400).json({ success: false, message: 'New email and OTP code are required' });
     return;
   }
 
   try {
-    if (email) {
-      const existingUser = await prisma.user.findFirst({
-        where: { email, NOT: { id: userId } }
-      });
+    const user = await prisma.user.findFirst({
+      where: {
+        id: userId,
+        otpCode,
+        otpExpires: { gt: new Date() },
+      },
+    });
 
-      if (existingUser) {
-        res.status(409).json({ success: false, message: 'Email already in use' });
-        return;
-      }
+    if (!user) {
+      res.status(400).json({ success: false, message: 'Invalid or expired OTP code' });
+      return;
     }
 
+    // Commit Email Baru ke DB
     const updatedUser = await prisma.user.update({
       where: { id: userId },
       data: {
-        ...(name && { name }),
-        ...(email && { email })
+        email: newEmail,
+        isVerified: true,
+        otpCode: null,
+        otpExpires: null,
       },
-      select: { id: true, name: true, email: true, updatedAt: true }
     });
 
     res.status(200).json({
       success: true,
-      message: 'Profile updated successfully',
-      data: updatedUser
+      message: 'Email updated & verified successfully!',
+      data: updatedUser,
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
